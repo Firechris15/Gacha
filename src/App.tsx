@@ -580,10 +580,6 @@ function getRandomElement() {
   return ELEMENTS[Math.floor(Math.random() * ELEMENTS.length)]
 }
 
-function createOrbGrid() {
-  return Array.from({ length: 20 }, () => getRandomElement())
-}
-
 function getTypeMultiplier(attacker: ElementType, defender: ElementType) {
   const advantageMap: Record<ElementType, ElementType> = {
     STR: 'TEQ',
@@ -721,9 +717,30 @@ function findOrbChain(grid: ElementType[], startIndex: number) {
   return Array.from(visited)
 }
 
+function hasPlayableChain(grid: ElementType[]) {
+  return grid.some((_, index) => findOrbChain(grid, index).length >= 2)
+}
+
+function ensurePlayableGrid(grid: ElementType[]) {
+  if (hasPlayableChain(grid)) {
+    return grid
+  }
+
+  const next = [...grid]
+  const origin = Math.floor(Math.random() * next.length)
+  const neighbors = getNeighbors(origin)
+  const forcedNeighbor = neighbors[Math.floor(Math.random() * neighbors.length)]
+  next[forcedNeighbor] = next[origin]
+  return next
+}
+
+function createOrbGrid() {
+  return ensurePlayableGrid(Array.from({ length: 20 }, () => getRandomElement()))
+}
+
 function replaceOrbChain(grid: ElementType[], chain: number[]) {
   const chainSet = new Set(chain)
-  return grid.map((orb, index) => (chainSet.has(index) ? getRandomElement() : orb))
+  return ensurePlayableGrid(grid.map((orb, index) => (chainSet.has(index) ? getRandomElement() : orb)))
 }
 
 function weightedPick<T>(entries: Array<{ value: T; weight: number }>) {
@@ -1144,37 +1161,30 @@ function App() {
       return
     }
 
-    const pulls: CharacterTemplate[] = []
-    playTone(720, 0.12, 'triangle')
-    navigator.vibrate?.(20)
-
-    updateSave((previous) => {
-      const next = structuredClone(previous)
-      next.resources.stones -= cost
-
-      for (let index = 0; index < count; index += 1) {
-        const pulled = summonCharacter(count === 10 && index === count - 1)
-        pulls.push(pulled)
-        const owned = next.owned[pulled.id]
-        if (owned) {
-          owned.copies += 1
-          next.resources.zeni += 500 + RARITY_ORDER.indexOf(pulled.rarity) * 350
-        } else {
-          next.owned[pulled.id] = {
-            level: 1,
-            copies: 1,
-            awakenings: 0,
-          }
-          const firstOpenSlot = next.team.findIndex((memberId) => memberId === null)
-          if (firstOpenSlot >= 0) {
-            next.team[firstOpenSlot] = pulled.id
-          }
+    const pulls = Array.from({ length: count }, (_, index) => summonCharacter(count === 10 && index === count - 1))
+    const next = structuredClone(save)
+    next.resources.stones -= cost
+    for (const pulled of pulls) {
+      const owned = next.owned[pulled.id]
+      if (owned) {
+        owned.copies += 1
+        next.resources.zeni += 500 + RARITY_ORDER.indexOf(pulled.rarity) * 350
+      } else {
+        next.owned[pulled.id] = {
+          level: 1,
+          copies: 1,
+          awakenings: 0,
+        }
+        const firstOpenSlot = next.team.findIndex((memberId) => memberId === null)
+        if (firstOpenSlot >= 0) {
+          next.team[firstOpenSlot] = pulled.id
         }
       }
+    }
 
-      return next
-    })
-
+    playTone(720, 0.12, 'triangle')
+    navigator.vibrate?.(20)
+    setSave(next)
     setSummonResults(pulls)
     const rarePull = pulls.some((character) => RARITY_ORDER.indexOf(character.rarity) >= RARITY_ORDER.indexOf('SSR'))
     triggerBurst(rarePull ? pulls[pulls.length - 1].element : 'PHY', rarePull ? 12 : 7)
@@ -1316,112 +1326,111 @@ function App() {
     const actingCharacter = getCharacterDetails(TEMPLATE_BY_ID[slotId], save.owned[slotId], teamBonus)
     const orbElement = battle.orbGrid[orbIndex]
     let outcomeTab: Tab | null = null
-
     playTone(orbElement === actingCharacter.template.element ? 760 : 540, 0.12, 'triangle')
     navigator.vibrate?.(30)
     triggerBurst(orbElement, chain.length + 6)
+    triggerBurst(orbElement, chain.length + 6)
 
-    updateSave((previous) => {
-      if (!previous.battle) {
-        return previous
+    const next = structuredClone(save)
+    const liveBattle = next.battle
+    if (!liveBattle) {
+      return
+    }
+
+    const currentSlotId = next.team[liveBattle.activeSlot]
+    if (!currentSlotId) {
+      return
+    }
+
+    const currentCharacter = getCharacterDetails(TEMPLATE_BY_ID[currentSlotId], next.owned[currentSlotId], teamBonus)
+    const currentKi = liveBattle.ki[currentSlotId] ?? 0
+    const kiGain = chain.length + (orbElement === currentCharacter.template.element ? 2 : 0)
+    const nextKi = Math.min(24, currentKi + kiGain)
+    liveBattle.ki[currentSlotId] = nextKi
+
+    let attackType: BattleAction = 'Basic Attack'
+    if (nextKi >= 18) {
+      attackType = 'Ultimate Attack'
+    } else if (nextKi >= 12) {
+      attackType = 'Super Attack'
+    }
+
+    const typeMultiplier = getTypeMultiplier(currentCharacter.template.element, liveBattle.enemyElement)
+    const chainMultiplier = 1 + chain.length * 0.17
+    const skillMultiplier = attackType === 'Ultimate Attack' ? 2.3 : attackType === 'Super Attack' ? 1.6 : 1
+    const damage = Math.max(
+      120,
+      Math.round(currentCharacter.stats.atk * chainMultiplier * skillMultiplier * typeMultiplier - liveBattle.enemyDef * 0.55),
+    )
+
+    liveBattle.enemyHP = Math.max(0, liveBattle.enemyHP - damage)
+    liveBattle.orbGrid = replaceOrbChain(liveBattle.orbGrid, chain)
+    liveBattle.log.unshift(
+      `${currentCharacter.template.name} used ${attackType} for ${damage} damage with a ${chain.length}-orb ${orbElement} chain.`,
+    )
+
+    if (liveBattle.enemyHP <= 0) {
+      const stage = getStageById(liveBattle.stageId)
+      next.resources.stones += stage.rewards.stones
+      next.resources.zeni += stage.rewards.zeni
+      next.resources.medals += stage.rewards.medals
+      next.resources.capsules += stage.rewards.capsules
+      next.lastResult = {
+        outcome: 'Victory',
+        stageId: liveBattle.stageId,
+        rewards: {
+          stones: stage.rewards.stones,
+          zeni: stage.rewards.zeni,
+          stamina: 0,
+          maxStamina: 0,
+          medals: stage.rewards.medals,
+          capsules: stage.rewards.capsules,
+        },
+        summary: `${currentCharacter.template.name} finished ${liveBattle.enemyName} with a cinematic ${attackType.toLowerCase()}.`,
       }
-
-      const next = structuredClone(previous)
-      const liveBattle = next.battle
-      if (!liveBattle) {
-        return previous
+      next.battle = null
+      outcomeTab = 'Results'
+      setSave(next)
+      if (outcomeTab) {
+        playTone(880, 0.2, 'sawtooth')
+        setActiveTab(outcomeTab)
       }
+      return
+    }
 
-      const currentSlotId = next.team[liveBattle.activeSlot]
-      if (!currentSlotId) {
-        return previous
+    const enemyDamage = Math.max(
+      80,
+      Math.round(
+        liveBattle.enemyAtk * getTypeMultiplier(liveBattle.enemyElement, currentCharacter.template.element) -
+          currentCharacter.stats.def * 0.32,
+      ),
+    )
+    liveBattle.teamHP = Math.max(0, liveBattle.teamHP - enemyDamage)
+    liveBattle.log.unshift(`${liveBattle.enemyName} countered for ${enemyDamage} damage.`)
+    liveBattle.activeSlot = (liveBattle.activeSlot + 1) % MAX_TEAM_SIZE
+    liveBattle.turn += 1
+
+    if (liveBattle.teamHP <= 0) {
+      next.lastResult = {
+        outcome: 'Defeat',
+        stageId: liveBattle.stageId,
+        rewards: {
+          stones: 0,
+          zeni: 250,
+          stamina: 0,
+          maxStamina: 0,
+          medals: 2,
+          capsules: 0,
+        },
+        summary: `${liveBattle.enemyName} survived the rush, but the team still salvaged battle data.`,
       }
+      next.resources.zeni += 250
+      next.resources.medals += 2
+      next.battle = null
+      outcomeTab = 'Results'
+    }
 
-      const currentCharacter = getCharacterDetails(TEMPLATE_BY_ID[currentSlotId], next.owned[currentSlotId], teamBonus)
-      const currentKi = liveBattle.ki[currentSlotId] ?? 0
-      const kiGain = chain.length + (orbElement === currentCharacter.template.element ? 2 : 0)
-      const nextKi = Math.min(24, currentKi + kiGain)
-      liveBattle.ki[currentSlotId] = nextKi
-
-      let attackType: BattleAction = 'Basic Attack'
-      if (nextKi >= 18) {
-        attackType = 'Ultimate Attack'
-      } else if (nextKi >= 12) {
-        attackType = 'Super Attack'
-      }
-
-      const typeMultiplier = getTypeMultiplier(currentCharacter.template.element, liveBattle.enemyElement)
-      const chainMultiplier = 1 + chain.length * 0.17
-      const skillMultiplier = attackType === 'Ultimate Attack' ? 2.3 : attackType === 'Super Attack' ? 1.6 : 1
-      const damage = Math.max(
-        120,
-        Math.round(currentCharacter.stats.atk * chainMultiplier * skillMultiplier * typeMultiplier - liveBattle.enemyDef * 0.55),
-      )
-
-      liveBattle.enemyHP = Math.max(0, liveBattle.enemyHP - damage)
-      liveBattle.orbGrid = replaceOrbChain(liveBattle.orbGrid, chain)
-      liveBattle.log.unshift(
-        `${currentCharacter.template.name} used ${attackType} for ${damage} damage with a ${chain.length}-orb ${orbElement} chain.`,
-      )
-
-      if (liveBattle.enemyHP <= 0) {
-        const stage = getStageById(liveBattle.stageId)
-        next.resources.stones += stage.rewards.stones
-        next.resources.zeni += stage.rewards.zeni
-        next.resources.medals += stage.rewards.medals
-        next.resources.capsules += stage.rewards.capsules
-        next.lastResult = {
-          outcome: 'Victory',
-          stageId: liveBattle.stageId,
-          rewards: {
-            stones: stage.rewards.stones,
-            zeni: stage.rewards.zeni,
-            stamina: 0,
-            maxStamina: 0,
-            medals: stage.rewards.medals,
-            capsules: stage.rewards.capsules,
-          },
-          summary: `${currentCharacter.template.name} finished ${liveBattle.enemyName} with a cinematic ${attackType.toLowerCase()}.`,
-        }
-        next.battle = null
-        outcomeTab = 'Results'
-        return next
-      }
-
-      const enemyDamage = Math.max(
-        80,
-        Math.round(
-          liveBattle.enemyAtk * getTypeMultiplier(liveBattle.enemyElement, currentCharacter.template.element) -
-            currentCharacter.stats.def * 0.32,
-        ),
-      )
-      liveBattle.teamHP = Math.max(0, liveBattle.teamHP - enemyDamage)
-      liveBattle.log.unshift(`${liveBattle.enemyName} countered for ${enemyDamage} damage.`)
-      liveBattle.activeSlot = (liveBattle.activeSlot + 1) % MAX_TEAM_SIZE
-      liveBattle.turn += 1
-
-      if (liveBattle.teamHP <= 0) {
-        next.lastResult = {
-          outcome: 'Defeat',
-          stageId: liveBattle.stageId,
-          rewards: {
-            stones: 0,
-            zeni: 250,
-            stamina: 0,
-            maxStamina: 0,
-            medals: 2,
-            capsules: 0,
-          },
-          summary: `${liveBattle.enemyName} survived the rush, but the team still salvaged battle data.`,
-        }
-        next.resources.zeni += 250
-        next.resources.medals += 2
-        next.battle = null
-        outcomeTab = 'Results'
-      }
-
-      return next
-    })
+    setSave(next)
 
     if (outcomeTab) {
       playTone(outcomeTab === 'Results' ? 880 : 200, 0.2, 'sawtooth')
