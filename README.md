@@ -1,38 +1,33 @@
-# Mobile Anime Gacha RPG
+# Astral Legends: Ki Breakers
 
-A fully playable mobile-first anime gacha RPG web application built with React, TypeScript, and Tailwind CSS.
+A playable mobile-first anime gacha RPG built with React, TypeScript, Tailwind CSS, Framer Motion, and Vite.
 
-## Features
+## Included gameplay
 
-- Complete character collection and team building system
-- Turn-based anime battle system with Ki orb mechanics
-- Gacha/summon system with multiple banners
-- Character progression and awakening system
-- Story mode with missions and boss fights
-- Events and endgame content
-- PWA support for home screen installation
-- Touch-optimized for iPad Safari
+- 6-character team builder with element, rarity, tags, passives, leader skills, super attacks, and ultimate attacks
+- Single and multi-summon banner with guaranteed SSR on multis and duplicate copy handling
+- Character leveling and awakening with medals and capsules
+- Turn-based ki-orb battle system with type advantage and canvas effects
+- Story, event, and endgame stages with stamina costs and rewards
+- Daily login rewards and persistent autosave with localStorage
+- PWA manifest and offline asset caching for installable mobile play
+- Lightweight generated audio cues for menu, summon, and battle moments
 
-## Tech Stack
-
-- React + TypeScript
-- Tailwind CSS + Framer Motion
-- Vite
-- LocalStorage/IndexedDB
-- Canvas for animations
-
-## Getting Started
+## Getting started
 
 ```bash
 npm install
 npm run dev
 ```
 
-Build for production:
+## Validation
+
 ```bash
+npm run lint
 npm run build
 ```
 
-## Project Status
+## Notes
 
-Development in progress - Building complete game systems and features.
+- Save data is stored in browser localStorage under `gacha-save-v1`
+- Use the fullscreen button or install prompt on supported mobile browsers for an app-like experience
